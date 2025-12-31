@@ -4,9 +4,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import math
+import random
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+import isaaclab.assets
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import (
     ActionTermCfg as ActionTerm,
@@ -22,21 +24,27 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
-
+from isaaclab.sim.spawners.shapes import CuboidCfg
 from . import mdp
 from .ur_gripper import UR_GRIPPER_CFG
-
-##
-# Pre-defined configs
-##
-
-from isaaclab_assets.robots.cartpole import CARTPOLE_CFG  # isort:skip
-
-
+import isaaclab.sim.schemas
 ##
 # Scene definition
 ##
 
+ENV_SPACING = 2.5
+
+def get_random_translation():
+    x = random.uniform(0.1, 1)
+    y = random.uniform(0.1, 1)
+    z = 0
+    # randomly assign negative sign
+    if random.random() < 0.5:
+        x = -x
+    if random.random() < 0.5:
+        y = -y
+
+    return (x, y, z)
 
 @configclass
 class ReachcubepickSceneCfg(InteractiveSceneCfg):
@@ -44,6 +52,16 @@ class ReachcubepickSceneCfg(InteractiveSceneCfg):
 
     ground = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg())
     robot = UR_GRIPPER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    cube = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Cube",
+        spawn=CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            mass_props=sim_utils.schemas.MassPropertiesCfg(mass=0.1),
+            rigid_props=sim_utils.schemas.RigidBodyPropertiesCfg(),
+            collision_props=sim_utils.CollisionPropertiesCfg()
+        ),
+        init_state = RigidObjectCfg.InitialStateCfg(pos=get_random_translation())
+    )
 
 ##
 # MDP settings
@@ -158,7 +176,7 @@ class CurriculumCfg:
 @configclass
 class ReachcubepickEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: ReachcubepickSceneCfg = ReachcubepickSceneCfg(num_envs=2000, env_spacing=2.5)
+    scene: ReachcubepickSceneCfg = ReachcubepickSceneCfg(num_envs=2000, env_spacing=ENV_SPACING)
     observations = ObservationsCfg()
     actions = ActionsCfg()
     commands: CommandsCfg = CommandsCfg()
