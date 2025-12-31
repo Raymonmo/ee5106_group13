@@ -45,3 +45,12 @@ def position_command_error_tanh(
     curr_pos_w = asset.data.body_state_w[:, asset_cfg.body_ids[0], :3] # type: ignore
     distance = torch.norm(curr_pos_w - des_pos_w, dim=1)
     return 1 - torch.tanh(distance / std)
+
+def position_target_asset_error(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, target_asset_cfg: SceneEntityCfg
+    ) -> torch.Tensor:
+    asset: RigidObject = env.scene[asset_cfg.name]
+    target_asset: RigidObject = env.scene[target_asset_cfg.name]
+    curr_pos_w = asset.data.body_state_w[:, asset_cfg.body_ids[0], :3] # type: ignore
+    target_pos_w = target_asset.data.body_state_w[:, [0], :3].squeeze() # type: ignore
+    return torch.norm(curr_pos_w - target_pos_w, dim=1)

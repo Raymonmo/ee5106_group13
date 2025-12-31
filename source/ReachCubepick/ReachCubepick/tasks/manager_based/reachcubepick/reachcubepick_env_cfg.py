@@ -4,9 +4,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import math
+import random
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+import isaaclab.assets
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import (
     ActionTermCfg as ActionTerm,
@@ -22,21 +24,27 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
-
+from isaaclab.sim.spawners.shapes import CuboidCfg
 from . import mdp
 from .ur_gripper import UR_GRIPPER_CFG
-
-##
-# Pre-defined configs
-##
-
-from isaaclab_assets.robots.cartpole import CARTPOLE_CFG  # isort:skip
-
-
+import isaaclab.sim.schemas
 ##
 # Scene definition
 ##
 
+ENV_SPACING = 2.5
+
+def get_random_translation():
+    x = random.uniform(0.5, 0.8)
+    y = random.uniform(0.1, 0.2)
+    z = 0
+    # randomly assign negative sign
+    if random.random() < 0.5:
+        x = -x
+    if random.random() < 0.5:
+        y = -y
+
+    return (x, y, z)
 
 @configclass
 class ReachcubepickSceneCfg(InteractiveSceneCfg):
@@ -44,6 +52,16 @@ class ReachcubepickSceneCfg(InteractiveSceneCfg):
 
     ground = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg())
     robot = UR_GRIPPER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    cube = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Cube",
+        spawn=CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            mass_props=sim_utils.schemas.MassPropertiesCfg(mass=0.1),
+            rigid_props=sim_utils.schemas.RigidBodyPropertiesCfg(),
+            collision_props=sim_utils.CollisionPropertiesCfg()
+        ),
+        init_state = RigidObjectCfg.InitialStateCfg(pos=get_random_translation())
+    )
 
 ##
 # MDP settings
@@ -56,9 +74,10 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        pose_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "ee_pose"})
+        # For moving the gripper to the cube pos, we needn't a pose command
+        # pose_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "ee_pose"})
         actions = ObsTerm(func=mdp.last_action)
-
+        cube_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("cube")})
         def __post_init__(self):
             self.enable_corruption = True
             self.concatenate_terms = True
@@ -77,40 +96,47 @@ class ActionsCfg:
     )
 
 
-@configclass
-class CommandsCfg:
-    ee_pose = mdp.UniformPoseCommandCfg(
-        asset_name="robot",
-        body_name="ee_link",
-        resampling_time_range=(4.0, 4.0),
-        debug_vis=True,
-        ranges=mdp.UniformPoseCommandCfg.Ranges(
-            pos_x=(0.35, 0.65),
-            pos_y=(-0.2, 0.2),
-            pos_z=(0.15, 0.5),
-            roll=(0.0, 0.0),
-            pitch=(math.pi / 2, math.pi / 2),
-            yaw=(-3.14, 3.14),
-        ),
-    )
+# @configclass
+# class CommandsCfg:
+#     ee_pose = mdp.UniformPoseCommandCfg(
+#         asset_name="robot",
+#         body_name="ee_link",
+#         resampling_time_range=(4.0, 4.0),
+#         debug_vis=True,
+#         ranges=mdp.UniformPoseCommandCfg.Ranges(
+#             pos_x=(0.35, 0.65),
+#             pos_y=(-0.2, 0.2),
+#             pos_z=(0.15, 0.5),
+#             roll=(0.0, 0.0),
+#             pitch=(math.pi / 2, math.pi / 2),
+#             yaw=(-3.14, 3.14),
+#         ),
+#     )
 
 @configclass
 class RewardsCfg:
-    end_effector_orientation_tracking = RewTerm(
-        func=mdp.orientation_command_error,
-        weight=-0.1,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "command_name": "ee_pose"},
-    )
+    # For moving the gripper to arbitrary position in the env
+    # end_effector_orientation_tracking = RewTerm(
+    #     func=mdp.orientation_command_error,
+    #     weight=-0.1,
+    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "command_name": "ee_pose"},
+    # )
 
-    end_effector_position_tracking = RewTerm(
-        func=mdp.position_command_error,
-        weight=-0.2,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "command_name": "ee_pose"},
-    )
-    end_effector_position_tracking_fine_grained = RewTerm(
-        func=mdp.position_command_error_tanh,
-        weight=0.1,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "std": 0.1, "command_name": "ee_pose"},
+    # end_effector_position_tracking = RewTerm(
+    #     func=mdp.position_command_error,
+    #     weight=-0.2,
+    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "command_name": "ee_pose"},
+    # )
+    # end_effector_position_tracking_fine_grained = RewTerm(
+    #     func=mdp.position_command_error_tanh,
+    #     weight=0.1,
+    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "std": 0.1, "command_name": "ee_pose"},
+    # )
+    # For moving the gripper to the cube pos
+    end_effector_to_cube_position_tracking = RewTerm(
+        func=mdp.position_target_asset_error,
+        weight=-1.0,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "target_asset_cfg": SceneEntityCfg("cube")},
     )
 
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001)
@@ -119,6 +145,7 @@ class RewardsCfg:
         weight=-0.0001,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
+
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
@@ -158,10 +185,10 @@ class CurriculumCfg:
 @configclass
 class ReachcubepickEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: ReachcubepickSceneCfg = ReachcubepickSceneCfg(num_envs=2000, env_spacing=2.5)
+    scene: ReachcubepickSceneCfg = ReachcubepickSceneCfg(num_envs=2000, env_spacing=ENV_SPACING)
     observations = ObservationsCfg()
     actions = ActionsCfg()
-    commands: CommandsCfg = CommandsCfg()
+    # commands: CommandsCfg = CommandsCfg()
     rewards = RewardsCfg()
     terminations = TerminationsCfg()
     events = EventCfg()
