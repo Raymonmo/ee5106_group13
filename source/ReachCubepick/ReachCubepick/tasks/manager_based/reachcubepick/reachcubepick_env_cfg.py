@@ -1,10 +1,9 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import math
 import random
+import torch
 
 import isaaclab.sim as sim_utils
 import isaaclab.assets
@@ -20,14 +19,17 @@ from isaaclab.managers import (
     SceneEntityCfg,
     TerminationTermCfg as DoneTerm,
 )
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab.sim.spawners.shapes import CuboidCfg
 from . import mdp
-from .ur_gripper import UR_GRIPPER_CFG
-import isaaclab.sim.schemas
+
+# [修改 1] 导入 Franka 配置
+from isaaclab_assets import FRANKA_PANDA_HIGH_PD_CFG
+
 ##
 # Scene definition
 ##
@@ -35,32 +37,60 @@ import isaaclab.sim.schemas
 ENV_SPACING = 2.5
 
 def get_random_translation():
-    x = random.uniform(0.5, 0.8)
-    y = random.uniform(0.1, 0.2)
-    z = 0
-    # randomly assign negative sign
-    if random.random() < 0.5:
-        x = -x
-    if random.random() < 0.5:
-        y = -y
-
+    # 稍微调整了生成范围，适配 Franka 的工作空间
+    x = random.uniform(0.3, 0.5)
+    y = random.uniform(-0.2, 0.2)
+    z = 0.025
     return (x, y, z)
 
 @configclass
 class ReachcubepickSceneCfg(InteractiveSceneCfg):
-    """Configuration for a cart-pole scene."""
+    """Configuration for the scene."""
 
     ground = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg())
-    robot = UR_GRIPPER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+
+    _robot_cfg = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    # 2. 强制开启接触传感器支持 (PhysX 需要这个标志才会上报碰撞数据)
+    _robot_cfg.spawn.activate_contact_sensors = True
+    
+    # [修改 2] 替换为 Franka Panda 机器人
+    robot = _robot_cfg
+    
     cube = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Cube",
         spawn=CuboidCfg(
-            size=(0.05, 0.05, 0.05),
+            size=(0.04, 0.04, 0.04), # 稍微调小一点，方便夹取
             mass_props=sim_utils.schemas.MassPropertiesCfg(mass=0.1),
             rigid_props=sim_utils.schemas.RigidBodyPropertiesCfg(),
-            collision_props=sim_utils.CollisionPropertiesCfg()
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)), # 给个绿色方便看
         ),
         init_state = RigidObjectCfg.InitialStateCfg(pos=get_random_translation())
+    )
+
+    contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/panda_(link[1-9]|hand).*", 
+        history_length=3, 
+        track_air_time=False,
+    )
+
+    dome_light = AssetBaseCfg(
+        prim_path="/World/DomeLight",
+        spawn=sim_utils.DomeLightCfg(
+            intensity=2000.0,      # 亮度，觉得不够亮可以调到 3000.0
+            color=(1.0, 1.0, 1.0), # 白光
+            # texture_file=...     # 如果你想用HDR图片做背景（比如蓝天白云），可以在这里指定路径
+        )
+    )
+
+    distant_light = AssetBaseCfg(
+        prim_path="/World/DistantLight",
+        spawn=sim_utils.DistantLightCfg(
+            color=(0.9, 0.9, 0.9),
+            intensity=2500.0       # 太阳强度
+        ),
+        # 设置太阳的角度，让阴影好看一点
+        init_state=AssetBaseCfg.InitialStateCfg(rot=(0.738, 0.477, 0.477, 0.0)),
     )
 
 ##
@@ -74,10 +104,17 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        # For moving the gripper to the cube pos, we needn't a pose command
-        # pose_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "ee_pose"})
         actions = ObsTerm(func=mdp.last_action)
-        cube_pos = ObsTerm(func=mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("cube")})
+        target_object_pos = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame, 
+            params={"target_cfg": SceneEntityCfg("cube"), "robot_cfg": SceneEntityCfg("robot")}
+        )
+
+        ee_pos = ObsTerm(
+            func=mdp.link_pos_in_robot_root_frame,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names=["panda_hand"])}
+        )
+        
         def __post_init__(self):
             self.enable_corruption = True
             self.concatenate_terms = True
@@ -87,59 +124,79 @@ class ObservationsCfg:
 
 @configclass
 class ActionsCfg:
+    # [修改 3] Franka 手臂控制 (7个自由度)
     arm_action: ActionTerm = mdp.JointPositionActionCfg(
         asset_name="robot",
-        joint_names=["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint", "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"],
-        scale=1,
+        joint_names=["panda_joint.*"], # 使用正则匹配所有 7 个关节
+        scale=0.5,                     # 稍微降低一点动作缩放，训练更稳定
         use_default_offset=True,
-        debug_vis=True
     )
 
+    # [修改 4] 新增夹爪控制 (1个自由度，控制开合)
+    # BinaryJointPositionActionCfg 会把输出映射为 "开" 或 "关"
+    # 或者使用 JointPositionActionCfg 进行连续控制
+    gripper_action: ActionTerm = mdp.BinaryJointPositionActionCfg(
+        asset_name="robot",
+        joint_names=["panda_finger_joint.*"], # 同时控制两个指头
+        open_command_expr={"panda_finger_joint.*": 0.04}, # 张开位置
+        close_command_expr={"panda_finger_joint.*": 0.0}, # 闭合位置
+    )
 
-# @configclass
-# class CommandsCfg:
-#     ee_pose = mdp.UniformPoseCommandCfg(
-#         asset_name="robot",
-#         body_name="ee_link",
-#         resampling_time_range=(4.0, 4.0),
-#         debug_vis=True,
-#         ranges=mdp.UniformPoseCommandCfg.Ranges(
-#             pos_x=(0.35, 0.65),
-#             pos_y=(-0.2, 0.2),
-#             pos_z=(0.15, 0.5),
-#             roll=(0.0, 0.0),
-#             pitch=(math.pi / 2, math.pi / 2),
-#             yaw=(-3.14, 3.14),
-#         ),
-#     )
 
 @configclass
 class RewardsCfg:
-    # For moving the gripper to arbitrary position in the env
-    # end_effector_orientation_tracking = RewTerm(
-    #     func=mdp.orientation_command_error,
-    #     weight=-0.1,
-    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "command_name": "ee_pose"},
+    # reaching_reward = RewTerm(
+    #     func=mdp.position_target_asset_error, # 计算 ||pos - target||
+    #     weight=-1.0, # 保持负数，代表惩罚距离
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=["panda_hand"]), 
+    #         "target_asset_cfg": SceneEntityCfg("cube")
+    #     },
     # )
 
-    # end_effector_position_tracking = RewTerm(
-    #     func=mdp.position_command_error,
-    #     weight=-0.2,
-    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "command_name": "ee_pose"},
-    # )
-    # end_effector_position_tracking_fine_grained = RewTerm(
-    #     func=mdp.position_command_error_tanh,
-    #     weight=0.1,
-    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "std": 0.1, "command_name": "ee_pose"},
-    # )
-    # For moving the gripper to the cube pos
-    end_effector_to_cube_position_tracking = RewTerm(
+    reaching_reward = RewTerm(
+        func=mdp.object_approach_reward, # 使用上面修改后的函数
+        weight=1.5,                  # 改为正数！因为函数返回的是[0,1]的好感度
+        params={
+            "std": 0.25,             # 调节参数，越小要求精度越高
+            "asset_cfg": SceneEntityCfg("robot", body_names=["panda_hand"]), 
+            "target_asset_cfg": SceneEntityCfg("cube")
+        },
+    )
+    
+    # [新增] 靠近奖励 (Shaped Reward)
+    # 相比单纯的距离惩罚，这个奖励在非常接近时给分更高，引导性更强
+    approaching_reward = RewTerm(
         func=mdp.position_target_asset_error,
-        weight=-1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=["ee_link"]), "target_asset_cfg": SceneEntityCfg("cube")},
+        weight=-0.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["panda_hand"]), 
+            "target_asset_cfg": SceneEntityCfg("cube"),
+            # 注意：IsaacLab 的 mdp.position_target_asset_error 默认返回的是距离本身
+            # 如果想用 exp(-dist)，需要自定义函数。
+            # 为了简单，我们先加大上面的 weight=-1.0 的权重，
+            # 或者把 action_rate 的惩罚调小，让它敢于移动。
+        },
     )
 
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001)
+    # [关键修复] 必须正确引用 Lifting 函数
+    object_lifted = RewTerm(
+        func=mdp.object_is_lifted,  # <--- 使用我们在上面定义的 Python 函数
+        weight=100.0, # 提高奖励权重，一旦举起给大分
+        params={"minimum_height": 0.06, "asset_cfg": SceneEntityCfg("cube")},
+    )
+
+    vertical_alignment = RewTerm(
+        func=mdp.gripper_vertical_reward,  # <--- 使用上面定义的函数
+        weight=1.0,                    # 权重不用太大，辅助引导即可
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["panda_hand"]),
+        },
+    )
+
+    # [调整] 降低惩罚项
+    # 如果惩罚太高，机器人就不敢动了
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001) # 降低惩罚
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
         weight=-0.0001,
@@ -150,6 +207,14 @@ class RewardsCfg:
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
+    illegal_contact = DoneTerm(
+        func=mdp.illegal_contact,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces"), 
+            "threshold": 0.1,  # 只要传感器检测到任何力 > 0.1N 就重置
+        },
+    )
+
 
 @configclass
 class EventCfg:
@@ -157,30 +222,36 @@ class EventCfg:
         func=mdp.reset_joints_by_scale,
         mode="reset",
         params={
-            "position_range": (0.75, 1.25),
+            "position_range": (0.5, 1.5),
             "velocity_range": (0.0, 0.0),
+        },
+    )
+    
+    # 每次重置时随机化方块位置
+    reset_cube_pos = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {"x": (0.3, 0.5), "y": (-0.2, 0.2), "z": (0.025, 0.0025)},
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("cube"),
         },
     )
 
 
 @configclass
 class CurriculumCfg:
-    """Curriculum terms for the MDP"""
-
     action_rate = CurrTerm(
         func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 4500}
     )
-
     joint_vel = CurrTerm(
         func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.001, "num_steps": 4500}
     )
 
 
-
 ##
 # Environment configuration
 ##
-
 
 @configclass
 class ReachcubepickEnvCfg(ManagerBasedRLEnvCfg):
@@ -188,20 +259,17 @@ class ReachcubepickEnvCfg(ManagerBasedRLEnvCfg):
     scene: ReachcubepickSceneCfg = ReachcubepickSceneCfg(num_envs=2000, env_spacing=ENV_SPACING)
     observations = ObservationsCfg()
     actions = ActionsCfg()
-    # commands: CommandsCfg = CommandsCfg()
     rewards = RewardsCfg()
     terminations = TerminationsCfg()
     events = EventCfg()
     curriculum = CurriculumCfg()
 
-    # Post initialization
     def __post_init__(self) -> None:
         """Post initialization."""
-        # general settings
         self.decimation = 2
         self.sim.render_interval = self.decimation
-        self.episode_length_s = 3.0
-        self.viewer.eye = (3.5, 3.5, 3.5)
+        self.episode_length_s = 5.0 # 稍微延长一点时间给夹取动作
+        self.viewer.eye = (2.5, 2.5, 2.5)
         self.sim.dt = 1.0 / 60.0
 
 @configclass
