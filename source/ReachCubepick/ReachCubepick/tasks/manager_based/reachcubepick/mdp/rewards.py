@@ -128,3 +128,47 @@ def gripper_vertical_reward(env, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     # 只要点积大于 0 (大致朝下) 就给奖励，越垂直奖励越高
     # 使用 torch.clamp 把负值截断为 0，防止惩罚
     return torch.clamp(dot_prod, min=0.0)
+
+def object_height_continuous_reward(
+    env: ManagerBasedRLEnv, 
+    asset_cfg: SceneEntityCfg, 
+    target_height: float, 
+    std: float
+) -> torch.Tensor:
+    """
+    连续的高度奖励：引导机器人把方块举到目标高度。
+    """
+    # 1. 获取方块当前位置
+    asset: RigidObject = env.scene[asset_cfg.name]
+    curr_pos_w = asset.data.root_state_w[:, :3]
+    
+    # 2. 获取方块的高度 (Z轴)
+    curr_height = curr_pos_w[:, 2]
+    
+    # 3. 计算奖励：使用 Tanh 函数，让高度越接近 target_height 分数越高
+    # 比如：当前高度 0.02 -> 0分；高度 0.3 -> 接近1分
+    # 这里的 distance 是 "当前高度" 与 "目标高度" 的差
+    distance = torch.abs(target_height - curr_height)
+    
+    # 我们希望 distance 越小越好 (越接近目标高度)
+    return 1.0 - torch.tanh(distance / std)
+
+def object_keep_xy_penalty(
+    env: ManagerBasedRLEnv, 
+    asset_cfg: SceneEntityCfg, 
+    target_pos_xy: tuple[float, float] = (0.5, 0.0) # 这里可以设为初始生成的中心区域
+) -> torch.Tensor:
+    """
+    水平位移惩罚：防止机器人在举起过程中乱甩方块。
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    curr_pos_xy = asset.data.root_state_w[:, :2] # 只取 X 和 Y
+    
+    # 目标 XY (例如方块生成的平均中心)
+    target = torch.tensor(target_pos_xy, device=env.device).repeat(env.num_envs, 1)
+    
+    # 计算当前 XY 和目标 XY 的距离
+    error = torch.norm(curr_pos_xy - target, dim=1)
+    
+    # 返回距离作为惩罚 (因为 weight 会设为负数，所以这里返回正的距离)
+    return error

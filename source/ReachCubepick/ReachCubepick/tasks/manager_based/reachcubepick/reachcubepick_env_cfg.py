@@ -186,6 +186,34 @@ class RewardsCfg:
         params={"minimum_height": 0.06, "asset_cfg": SceneEntityCfg("cube")},
     )
 
+    # lifting_reward = RewTerm(
+    #     func=mdp.object_height_continuous_reward, # 使用上面的自定义函数
+    #     weight=3.0, # 权重比 reaching 大，让它拿到后更有动力往上提
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("cube"),
+    #         "target_height": 0.4, # 目标高度
+    #         "std": 0.15           # 敏感度
+    #     },
+    # )
+
+    # keep_vertical = RewTerm(
+    #     func=mdp.object_keep_xy_penalty,
+    #     weight=-1.0, # 负分惩罚
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("cube"),
+    #         # 这里的 target_pos_xy 最好设为你的生成中心，比如 (0.4, 0.0)
+    #         "target_pos_xy": (0.4, 0.0) 
+    #     },
+    # )
+    
+    # 4. [保留] 任务完成的大奖 (二值奖励)
+    # 当高度真的达到标准时，给一个巨大的额外奖励，作为最终目标的确认
+    # task_success = RewTerm(
+    #     func=mdp.object_is_lifted,
+    #     weight=20.0, 
+    #     params={"minimum_height": 0.3, "asset_cfg": SceneEntityCfg("cube")},
+    # )
+
     vertical_alignment = RewTerm(
         func=mdp.gripper_vertical_reward,  # <--- 使用上面定义的函数
         weight=1.0,                    # 权重不用太大，辅助引导即可

@@ -79,6 +79,7 @@ import os
 import random
 import time
 import torch
+from datetime import datetime
 
 import skrl
 from packaging import version
@@ -184,11 +185,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
 
     # wrap for video recording
     if args_cli.video:
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        safe_task_name = args_cli.task.replace(":", "_")
+        video_prefix = f"{safe_task_name}_{algorithm}_{timestamp}"
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "play"),
             "step_trigger": lambda step: step == 0,
             "video_length": args_cli.video_length,
             "disable_logger": True,
+            "name_prefix": video_prefix,
         }
         print("[INFO] Recording videos during training.")
         print_dict(video_kwargs, nesting=4)

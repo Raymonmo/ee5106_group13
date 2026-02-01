@@ -15,6 +15,9 @@ a more user-friendly way.
 import argparse
 import sys
 
+import shutil   
+import inspect  
+
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
@@ -180,6 +183,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+
+    try:
+        # 1. 获取 env_cfg 对象的类定义所在的源文件路径
+        # 这会自动解析到: /home/lry/.../reachcubepick_env_cfg.py
+        source_file_path = inspect.getfile(type(env_cfg))
+        
+        # 2. 定义目标路径
+        source_filename = os.path.basename(source_file_path)
+        destination_path = os.path.join(log_dir, "params", source_filename)
+        
+        # 3. 执行复制
+        print(f"[INFO] Backup source code file from: {source_file_path}")
+        shutil.copy2(source_file_path, destination_path)
+        print(f"[INFO] Source code saved to: {destination_path}")
+        
+    except Exception as e:
+        logger.warning(f"Failed to save source code file: {e}")
 
     # get checkpoint path (to resume training)
     resume_path = retrieve_file_path(args_cli.checkpoint) if args_cli.checkpoint else None
