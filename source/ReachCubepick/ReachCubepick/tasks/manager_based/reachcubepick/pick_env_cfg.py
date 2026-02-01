@@ -222,6 +222,8 @@ class RewardsCfg:
         },
     )
 
+    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-10.0)
+
     # [调整] 降低惩罚项
     # 如果惩罚太高，机器人就不敢动了
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001) # 降低惩罚
@@ -229,6 +231,18 @@ class RewardsCfg:
         func=mdp.joint_vel_l2,
         weight=-0.0001,
         params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-2e-5)
+    energy = RewTerm(
+        func=mdp.energy,
+        weight=-2e-7,
+        params={
+            # "robot" 是你在 SceneCfg 中定义的变量名
+            # joint_names 使用正则匹配，只选 "panda_joint" 开头的（即手臂）
+            # 从而排除了 "panda_finger_joint" 开头的（即夹爪）
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint.*"])
+        }
     )
 
 @configclass

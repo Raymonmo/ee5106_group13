@@ -172,3 +172,15 @@ def object_keep_xy_penalty(
     
     # 返回距离作为惩罚 (因为 weight 会设为负数，所以这里返回正的距离)
     return error
+
+def energy(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Penalize the energy used by the robot's joints."""
+    # 获取资产（机器人）
+    asset: Articulation = env.scene[asset_cfg.name]
+
+    # [关键] 只获取配置中指定的关节 (例如只选 panda_joint.*，排除夹爪)
+    qvel = asset.data.joint_vel[:, asset_cfg.joint_ids]
+    qfrc = asset.data.applied_torque[:, asset_cfg.joint_ids]
+    
+    # 计算功率 P = sum(|v * tau|)
+    return torch.sum(torch.abs(qvel) * torch.abs(qfrc), dim=-1)
