@@ -165,6 +165,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.seed = agent_cfg["seed"]
 
     # specify directory for logging experiments
+    agent_cfg["agent"]["experiment"]["directory"] = args_cli.task
     log_root_path = os.path.join("logs", "skrl", agent_cfg["agent"]["experiment"]["directory"])
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")

@@ -150,6 +150,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
     env_cfg.seed = experiment_cfg["seed"]
 
     # specify directory for logging experiments (load checkpoint)
+    experiment_cfg["agent"]["experiment"]["directory"] = args_cli.task
     log_root_path = os.path.join("logs", "skrl", experiment_cfg["agent"]["experiment"]["directory"])
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
